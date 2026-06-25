@@ -1,4 +1,4 @@
-#CAN-Bus Joint Controller
+CAN-Bus Joint Controller
 
 A single-joint robotic motor controller prototype demonstrating closed-loop PID position control over a CAN bus network — built as a portfolio project and architectural prototype for a future quadruped robot.
 
