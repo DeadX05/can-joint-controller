@@ -53,11 +53,11 @@ Additional tuning: stiction breakaway PWM = 35 (minimum PWM to overcome motor fr
 
 ### Commanded vs Actual Position
 
-![Tracking plot](analysis/day2_results/tracking_commanded_vs_actual.png)
+![Tracking plot](analysis/files/tracking_commanded_vs_actual.png)
 
 ### Tracking Error
 
-![Error plot](analysis/day2_results/tracking_error.png)
+![Error plot](analysis/files/tracking_error.png)
 
 The motor settles to within the 0.6° deadband within approximately 0.5 seconds at each step. Large transient error spikes at step changes are expected — the controller recovers quickly with no steady-state error remaining.
 
