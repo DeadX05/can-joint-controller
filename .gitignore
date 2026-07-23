@@ -1,0 +1,19 @@
+# ── Arduino / ESP32 build artifacts ──────────────────────────
+build/
+*.hex
+*.elf
+*.bin
+
+# ── Python ───────────────────────────────────────────────────
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# ── CAD / slicer output ──────────────────────────────────────
+*.gcode
+
+# ── OS / editor cruft ────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*~
