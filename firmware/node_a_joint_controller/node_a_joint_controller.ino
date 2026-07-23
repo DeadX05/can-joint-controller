@@ -1,203 +1,130 @@
-// ============================================================
-//  Node A — Day 1 starter: spin test + encoder ISR + Kp-only PID
-//  Hardware:
-//    TB6612  AIN1  → GPIO 25
-//            AIN2  → GPIO 26
-//            PWMA  → GPIO 27  (must be PWM-capable)
-//            STBY  → GPIO 14  (pulled HIGH in setup)
-//            VM    → 7.4V motor rail
-//            VCC   → 3.3V logic rail
-//            GND   → common GND
-//
-//    Encoder ChA   → GPIO 18  (interrupt-capable)
-//            ChB   → GPIO 19  (interrupt-capable)
-//            Vcc   → 3.3V  (or via level shifter if 5V encoder)
-//            GND   → common GND
-//
-//  Change CPR to match your encoder's counts-per-rev (before gearbox × gear ratio).
-//  Common N20 values after gearbox: 7×ratio, 11×ratio, 16×ratio.
-//  Check your datasheet — print the count at a known rotation to verify.
-// ============================================================
+/*
+ * Node A - Joint controller
+ *
+ * Receives 0x100 position commands over CAN, runs a closed-loop PID
+ * position controller against the quadrature encoder, drives the motor
+ * through a TB6612 H-bridge, and publishes 0x110 status at 10 Hz.
+ *
+ * Bus: ESP32 TWAI, 250 kbit/s, CTX=GPIO21, CRX=GPIO22 (via RX divider).
+ */
 
-// ── Pin definitions ─────────────────────────────────────────
-#define PIN_AIN1  25
-#define PIN_AIN2  26
-#define PIN_PWMA  27
-#define PIN_STBY  14
-#define PIN_ENC_A 18
-#define PIN_ENC_B 19
+#include "driver/twai.h"
 
-// ── Encoder config ──────────────────────────────────────────
-// Set this to your encoder's total CPR *after* the gearbox.
-// Example: 7 counts/rev motor × 100:1 gearbox = 700 CPR at output shaft.
-const float CPR = 700.0;
+// ---- CAN ----
+#define CAN_TX_PIN GPIO_NUM_21
+#define CAN_RX_PIN GPIO_NUM_22
+#define ID_CMD_POS   0x100
+#define ID_STATUS    0x110
 
-volatile int32_t encoderTicks = 0;
-volatile int      lastA = LOW;
+// ---- Motor / encoder (validated pins - DO NOT CHANGE) ----
+#define AIN1 26
+#define AIN2 27
+#define PWMA 25
+#define STBY 14
+#define ENC_A 32
+#define ENC_B 33
+
+// Hand-calibrated, replacing the nominal datasheet figure.
+const float COUNTS_PER_REV = 1146.0;
+const float DEG_PER_COUNT  = 360.0 / COUNTS_PER_REV;
+
+// ---- PID (empirically tuned) ----
+const float Kp = 10.0, Ki = 0.1, Kd = 0.1;
+const int   STICTION_PWM = 35;      // min duty that breaks static friction
+const float DEADBAND_DEG = 0.6;     // prevents limit-cycling at setpoint
+const float I_CLAMP      = 50.0;    // anti-windup against static friction
+const float ANGLE_MIN = -45.0, ANGLE_MAX = 180.0;
+
+volatile long encoderCount = 0;
+float targetDeg = 0.0;
+float integral = 0.0, lastErr = 0.0;
+unsigned long lastPid = 0, lastStatus = 0;
+int lastPwm = 0;
 
 void IRAM_ATTR encoderISR() {
-  int a = digitalRead(PIN_ENC_A);
-  int b = digitalRead(PIN_ENC_B);
-  // Standard quadrature decode: rising/falling A, read B for direction
-  if (a != lastA) {
-    if (a == HIGH) {
-      encoderTicks += (b == LOW) ? 1 : -1;
-    } else {
-      encoderTicks += (b == HIGH) ? 1 : -1;
-    }
-    lastA = a;
-  }
+  if (digitalRead(ENC_B)) encoderCount--; else encoderCount++;
 }
 
-float getPositionDeg() {
-  // noInterrupts/interrupts bracket to safely copy volatile int32
-  noInterrupts();
-  int32_t ticks = encoderTicks;
-  interrupts();
-  return (ticks / CPR) * 360.0;
+void setMotor(int pwm) {
+  pwm = constrain(pwm, -255, 255);
+  lastPwm = pwm;
+  if (pwm > 0)      { digitalWrite(AIN1, LOW);  digitalWrite(AIN2, HIGH); }
+  else if (pwm < 0) { digitalWrite(AIN1, HIGH); digitalWrite(AIN2, LOW);  }
+  else              { digitalWrite(AIN1, LOW);  digitalWrite(AIN2, LOW);  }
+  ledcWrite(PWMA, abs(pwm));
 }
 
-// ── Motor control ────────────────────────────────────────────
-// output: -255 (full reverse) to +255 (full forward)
-void setMotor(int output) {
-  output = constrain(output, -255, 255);
-  if (output > 0) {
-    digitalWrite(PIN_AIN1, HIGH);
-    digitalWrite(PIN_AIN2, LOW);
-    analogWrite(PIN_PWMA, output);
-  } else if (output < 0) {
-    digitalWrite(PIN_AIN1, LOW);
-    digitalWrite(PIN_AIN2, HIGH);
-    analogWrite(PIN_PWMA, -output);
-  } else {
-    // Coast (both LOW = free spin; both HIGH = brake)
-    digitalWrite(PIN_AIN1, LOW);
-    digitalWrite(PIN_AIN2, LOW);
-    analogWrite(PIN_PWMA, 0);
-  }
+float currentDeg() { return encoderCount * DEG_PER_COUNT; }
+
+void sendStatus() {
+  twai_message_t m = {};
+  m.identifier = ID_STATUS;
+  m.data_length_code = 8;
+  int16_t pos = (int16_t)(currentDeg() * 10);
+  int16_t tgt = (int16_t)(targetDeg * 10);
+  int16_t err = (int16_t)((targetDeg - currentDeg()) * 10);
+  m.data[0] = pos & 0xFF; m.data[1] = pos >> 8;
+  m.data[2] = tgt & 0xFF; m.data[3] = tgt >> 8;
+  m.data[4] = err & 0xFF; m.data[5] = err >> 8;
+  m.data[6] = (uint8_t)min(abs(lastPwm), 255);
+  m.data[7] = (fabs(targetDeg - currentDeg()) <= DEADBAND_DEG) ? 1 : 0;
+  twai_transmit(&m, 0);
 }
 
-// ── PID state ────────────────────────────────────────────────
-float setpointDeg  = 0.0;
-float Kp           = 2.0;   // Start here — tune upward until oscillation, then halve
-float Ki           = 0.0;   // Leave at 0 until Kp and Kd are settled
-float Kd           = 0.0;   // Add after Kp is tuned: start ~0.05
-float integral     = 0.0;
-float prevError    = 0.0;
-const float INTEGRAL_CLAMP = 80.0;  // prevents windup — tune alongside Ki
-
-unsigned long lastPIDTime = 0;
-
-void runPID() {
-  unsigned long now = millis();
-  float dt = (now - lastPIDTime) / 1000.0;
-  if (dt < 0.005) return;  // run at ~200Hz max
-  lastPIDTime = now;
-
-  float position = getPositionDeg();
-  float error    = setpointDeg - position;
-
-  // Integral with windup clamp
-  integral += Ki * error * dt;
-  integral  = constrain(integral, -INTEGRAL_CLAMP, INTEGRAL_CLAMP);
-
-  // Derivative
-  float derivative = (error - prevError) / dt;
-  prevError = error;
-
-  float output = (Kp * error) + integral + (Kd * derivative);
-  setMotor((int)output);
-}
-
-// ── Serial setpoint parser ───────────────────────────────────
-// Type a number in Serial Monitor and press Enter to command that angle.
-// Example: "90" → move to 90°, "0" → return to 0°, "-45" → go to -45°
-void checkSerial() {
-  if (Serial.available()) {
-    String s = Serial.readStringUntil('\n');
-    s.trim();
-    if (s.length() > 0) {
-      setpointDeg = s.toFloat();
-      integral    = 0.0;   // reset integral on new setpoint
-      prevError   = 0.0;
-      Serial.print(">> New setpoint: ");
-      Serial.println(setpointDeg);
-    }
-  }
-}
-
-// ── Setup ────────────────────────────────────────────────────
 void setup() {
   Serial.begin(115200);
-  delay(500);
-  Serial.println("Node A — Day 1 startup");
+  pinMode(AIN1, OUTPUT); pinMode(AIN2, OUTPUT); pinMode(STBY, OUTPUT);
+  pinMode(ENC_A, INPUT_PULLUP); pinMode(ENC_B, INPUT_PULLUP);
+  digitalWrite(STBY, HIGH);
+  ledcAttach(PWMA, 20000, 8);   // ESP32 core 3.x API
+  attachInterrupt(digitalPinToInterrupt(ENC_A), encoderISR, RISING);
 
-  // Motor driver pins
-  pinMode(PIN_AIN1, OUTPUT);
-  pinMode(PIN_AIN2, OUTPUT);
-  pinMode(PIN_PWMA, OUTPUT);
-  pinMode(PIN_STBY, OUTPUT);
-  digitalWrite(PIN_STBY, HIGH);  // MUST be HIGH — motor is dead if this is LOW
+  twai_general_config_t g =
+      TWAI_GENERAL_CONFIG_DEFAULT(CAN_TX_PIN, CAN_RX_PIN, TWAI_MODE_NORMAL);
+  twai_timing_config_t t = TWAI_TIMING_CONFIG_250KBITS();
+  twai_filter_config_t f = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+  twai_driver_install(&g, &t, &f);
+  twai_start();
 
-  // Encoder pins with pull-up (N20 Hall encoders are open-collector)
-  pinMode(PIN_ENC_A, INPUT_PULLUP);
-  pinMode(PIN_ENC_B, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(PIN_ENC_A), encoderISR, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(PIN_ENC_B), encoderISR, CHANGE);
-
-  lastA       = digitalRead(PIN_ENC_A);
-  lastPIDTime = millis();
-
-  // ── Spin test (runs once at startup) ──────────────────────
-  // Confirms: motor spins both ways, encoder counts respond correctly.
-  // Watch Serial Monitor during this phase.
-  Serial.println("Spin test: forward...");
-  setMotor(150);
-  delay(1500);
-  Serial.print("  Encoder after forward spin: ");
-  Serial.print(getPositionDeg(), 1);
-  Serial.println(" deg  (should be positive if wired correctly)");
-
-  Serial.println("Spin test: stop...");
-  setMotor(0);
-  delay(500);
-
-  Serial.println("Spin test: reverse...");
-  setMotor(-150);
-  delay(1500);
-  Serial.print("  Encoder after reverse spin: ");
-  Serial.print(getPositionDeg(), 1);
-  Serial.println(" deg  (should be less than after forward)");
-
-  setMotor(0);
-  delay(500);
-
-  // If encoder counts are backward (reverse reads positive), either:
-  //   (a) swap ENC_A and ENC_B pin definitions above, or
-  //   (b) swap AO1/AO2 motor wires physically
-  // Pick (a) — it's easier.
-
-  Serial.println("\nSpin test done. PID active. Type a setpoint angle and press Enter.");
-  Serial.println("Format: t_ms, setpoint_deg, actual_deg  (CSV — save this for Day 2 plots)");
-  Serial.println("---");
-
-  encoderTicks = 0;  // zero position after spin test
+  targetDeg = currentDeg();   // hold position on boot, no jump
+  Serial.println("Node A: joint controller ready");
 }
 
-// ── Main loop ────────────────────────────────────────────────
-unsigned long lastPrint = 0;
-
 void loop() {
-  checkSerial();
-  runPID();
-
-  // Print CSV log every 50ms — copy this into a .csv file for Day 2 plotting
-  if (millis() - lastPrint >= 50) {
-    lastPrint = millis();
-    Serial.print(millis());
-    Serial.print(",");
-    Serial.print(setpointDeg, 2);
-    Serial.print(",");
-    Serial.println(getPositionDeg(), 2);
+  twai_message_t rx;
+  while (twai_receive(&rx, 0) == ESP_OK) {
+    if (rx.identifier == ID_CMD_POS && rx.data_length_code >= 2) {
+      int16_t raw = (int16_t)(rx.data[0] | (rx.data[1] << 8));
+      targetDeg = constrain(raw / 10.0, ANGLE_MIN, ANGLE_MAX);
+      Serial.printf("CMD: %.1f deg\n", targetDeg);
+    }
   }
+
+  unsigned long now = millis();
+
+  // --- PID @ 100 Hz ---
+  if (now - lastPid >= 10) {
+    float dt = (now - lastPid) / 1000.0;
+    lastPid = now;
+
+    float err = targetDeg - currentDeg();
+    int pwm = 0;
+
+    if (fabs(err) > DEADBAND_DEG) {
+      integral = constrain(integral + err * dt, -I_CLAMP, I_CLAMP);
+      float deriv = (err - lastErr) / dt;
+      pwm = (int)(Kp * err + Ki * integral + Kd * deriv);
+      // friction compensation: below breakaway duty the motor does not
+      // move at all, so the integral would wind up fighting stiction
+      if (pwm > 0 && pwm <  STICTION_PWM) pwm =  STICTION_PWM;
+      if (pwm < 0 && pwm > -STICTION_PWM) pwm = -STICTION_PWM;
+    } else {
+      integral = 0;
+    }
+    lastErr = err;
+    setMotor(pwm);
+  }
+
+  // --- status @ 10 Hz ---
+  if (now - lastStatus >= 100) { lastStatus = now; sendStatus(); }
 }
