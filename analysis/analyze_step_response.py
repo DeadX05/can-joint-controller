@@ -12,7 +12,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # --- Load data ---
-df = pd.read_csv("day2_step_response.csv")
+df = pd.read_csv("data/day2_step_response.csv")
 
 # --- Plot 1: Commanded vs Actual position over time ---
 fig1, ax1 = plt.subplots(figsize=(11, 5))
@@ -24,7 +24,7 @@ ax1.set_title("Day 2 — PID Position Tracking: Commanded vs Actual\n(Kp=10, Ki=
 ax1.legend(loc="best")
 ax1.grid(True, alpha=0.3)
 fig1.tight_layout()
-fig1.savefig("tracking_commanded_vs_actual.png", dpi=150)
+fig1.savefig("figures/tracking_commanded_vs_actual.png", dpi=150)
 
 # --- Plot 2: Tracking error over time ---
 fig2, ax2 = plt.subplots(figsize=(11, 4))
@@ -35,7 +35,7 @@ ax2.set_ylabel("Error (deg)")
 ax2.set_title("Day 2 — Tracking Error vs Time")
 ax2.grid(True, alpha=0.3)
 fig2.tight_layout()
-fig2.savefig("tracking_error.png", dpi=150)
+fig2.savefig("figures/tracking_error.png", dpi=150)
 
 # --- RMS error: overall and per phase (per commanded step) ---
 overall_rms = np.sqrt(np.mean(df["error_deg"] ** 2))
@@ -50,4 +50,4 @@ for phase, group in df.groupby("phase", sort=False):
     print(f"  {phase:28s} target={last_row['target_deg']:7.2f}  "
           f"final_error={last_row['error_deg']:6.2f}  phase_RMS={phase_rms:6.2f}")
 
-print("\nFigures saved: tracking_commanded_vs_actual.png, tracking_error.png")
+print("\nFigures saved: figures/tracking_commanded_vs_actual.png, figures/tracking_error.png")
