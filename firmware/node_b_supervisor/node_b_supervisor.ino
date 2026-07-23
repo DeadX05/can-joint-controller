@@ -45,8 +45,19 @@ void loop() {
       if (logging) Serial.println("ms,pos,target,err,pwm,settled");
       else         Serial.println("# logging off");
     } else {
-      float cmd = constrain(Serial.parseFloat(), -45.0, 180.0);
+      /*
+       * parseFloat() must be called exactly once and stored. Arduino's
+       * constrain() is a macro that substitutes its first argument three
+       * times, so constrain(Serial.parseFloat(), lo, hi) reads the serial
+       * buffer up to three times: the first call consumes the number, the
+       * later ones find an empty buffer, block for the 1 s parse timeout
+       * and return 0 - and the macro yields that last value. Every command
+       * was sent as 0.0.
+       */
+      float raw_cmd = Serial.parseFloat();
       while (Serial.available()) Serial.read();
+      float cmd = constrain(raw_cmd, -45.0, 180.0);
+
       int16_t raw = (int16_t)(cmd * 10);
       twai_message_t m = {};
       m.identifier = ID_CMD_POS;
