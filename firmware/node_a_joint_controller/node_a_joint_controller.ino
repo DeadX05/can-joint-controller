@@ -45,11 +45,18 @@ void IRAM_ATTR encoderISR() {
   if (digitalRead(ENC_B)) encoderCount--; else encoderCount++;
 }
 
+/*
+ * Motor drive direction is inverted relative to the naive convention.
+ * With the un-swapped logic, drive direction and encoder counting
+ * direction disagree: every correction grows the error, PWM saturates
+ * at 255 and the joint runs away. AIN1/AIN2 are swapped here to match
+ * the encoder's counting sense.
+ */
 void setMotor(int pwm) {
   pwm = constrain(pwm, -255, 255);
   lastPwm = pwm;
-  if (pwm > 0)      { digitalWrite(AIN1, LOW);  digitalWrite(AIN2, HIGH); }
-  else if (pwm < 0) { digitalWrite(AIN1, HIGH); digitalWrite(AIN2, LOW);  }
+  if (pwm > 0)      { digitalWrite(AIN1, HIGH); digitalWrite(AIN2, LOW);  }
+  else if (pwm < 0) { digitalWrite(AIN1, LOW);  digitalWrite(AIN2, HIGH); }
   else              { digitalWrite(AIN1, LOW);  digitalWrite(AIN2, LOW);  }
   ledcWrite(PWMA, abs(pwm));
 }
