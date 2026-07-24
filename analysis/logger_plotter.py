@@ -2,6 +2,11 @@
 analysis/logger_plotter.py
 CAN Joint Controller — serial data logger + tracking error plotter
 
+Early bench tooling (Day 1/2). MOCK mode predates any hardware; LIVE mode
+consumes the Node B supervisor's CSV logging stream
+(ms,pos,target,err,pwm,settled). The final CAN step-response results were
+captured manually — see analysis/step_response_over_can.md.
+
 Day 1: Run in MOCK mode to test plots against generated fake data.
 Day 2+: Run in LIVE mode to log real serial data from Node B.
 
@@ -66,7 +71,8 @@ def generate_mock_data(duration_s=30, dt_ms=50, period_s=6.0, amplitude_deg=45.0
 def log_from_serial(port, baudrate=115200, output_path=None, duration_s=60):
     """
     Reads CSV lines from Node B over USB serial and saves to a file.
-    Expected Node B serial format:  t_ms,setpoint_deg,actual_deg
+    Expected Node B serial format (supervisor logging mode):
+        ms,pos,target,err,pwm,settled
     """
     import serial  # imported here so mock mode works without pyserial
 
@@ -92,14 +98,14 @@ def log_from_serial(port, baudrate=115200, output_path=None, duration_s=60):
                 if not line or line.startswith("#") or line.startswith(">>"):
                     continue
                 parts = line.split(",")
-                if len(parts) != 3:
+                if len(parts) != 6:          # ms,pos,target,err,pwm,settled
                     continue
                 try:
                     row = {
                         "t_ms":         int(parts[0]),
-                        "setpoint_deg": float(parts[1]),
-                        "actual_deg":   float(parts[2]),
-                        "error_deg":    round(float(parts[1]) - float(parts[2]), 3),
+                        "setpoint_deg": float(parts[2]),   # target
+                        "actual_deg":   float(parts[1]),   # pos
+                        "error_deg":    float(parts[3]),   # err
                     }
                     writer.writerow(row)
                     rows.append(row)
