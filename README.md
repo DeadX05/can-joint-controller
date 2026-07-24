@@ -5,8 +5,19 @@ control of a robotic joint** — a building block toward a quadruped leg.
 A target angle typed into the supervisor crosses the bus, the joint
 controller drives to it, and status frames stream back.
 
-**Status: working end to end.** Steady-state error is bounded by the 0.6°
-control deadband by design; **0.0–0.5° measured across −45°…180°.**
+![Joint assembly](media/mount_joint_assembly.jpg)
+
+*Joint assembly: N20 gearmotor in the printed mount, front retaining plate
+fitted, D-bore lever keyed to the output shaft.*
+
+**[▶ Demo video](media/demo_joint_step_response.mp4)** — a
+`0 → 45 → 90 → 0 → −45` step sequence.
+
+**Status: working end to end.** Steady-state error is **0.0–0.5° across
+−45°…180°, within the 0.6° control deadband.** The deadband bounds the
+error by construction — the controller stops correcting once inside it, and
+tightening it reintroduces the stiction limit cycle found during tuning. So
+that figure is a design tradeoff, not a performance ceiling.
 
 ---
 
@@ -49,11 +60,10 @@ media/                       demo video, wiring photos
 
 ## Hardware
 
-ESP32 ×2, TB6612FNG driver, N20 gearmotor + quadrature encoder (1146
-counts/rev, hand-calibrated), MCP2551 ×2. Transceivers run at **5 V** with
-a **220 Ω / 440 Ω divider on each RX line** back down to ~3.3 V; ~110 Ω
-termination per node. Full pinout and the physical-layer reasoning are in
-[`docs/hardware.md`](docs/hardware.md).
+ESP32 ×2, TB6612FNG driver, N20 gearmotor + quadrature encoder, MCP2551 ×2.
+Transceivers run at **5 V** with a **220 Ω / 440 Ω divider on each RX line**
+back down to ~3.3 V; ~110 Ω termination per node. Full pinout and the
+physical-layer reasoning are in [`docs/hardware.md`](docs/hardware.md).
 
 ## CAN protocol
 
@@ -79,9 +89,7 @@ breakaway, a 0.6° deadband, and an integral anti-windup clamp; range
 ## Results
 
 Step response commanded and observed entirely over CAN, across the full
-range. Steady-state error stays inside the 0.6° deadband (the controller
-stops correcting once within it — a design parameter, not a measurement
-floor):
+range. Steady-state error stays inside the 0.6° deadband:
 
 | Command | Settled | Error |
 |--------:|--------:|------:|
@@ -92,10 +100,7 @@ floor):
 | 180° | 179.6–180.3° | 0.0–0.3° |
 | −45° | −44.9 to −45.2° | 0.0–0.2° |
 
-Large, fast moves overshoot slightly and are walked back at the 35-PWM
-stiction floor — attributed to the printed lever's inertia back-driving the
-joint while the driver coasts (both inputs LOW) rather than brakes. Full
-capture, caveats, and the 10 Hz sampling limitation:
+Full capture, caveats, and the 10 Hz sampling limitation:
 [`analysis/step_response_over_can.md`](analysis/step_response_over_can.md).
 
 PID tuning from Day 2 (direct serial, before the bus was integrated):
@@ -113,6 +118,11 @@ partner, GPIO loopback, and cross-swap — each rung removing one class of
 suspect. Verbatim serial captures and bench measurements:
 [`docs/engineering-log.md`](docs/engineering-log.md).
 
+![Full bench](media/bench_two_node.jpg)
+
+*Full bench: joint controller node (left, with motor driver and battery)
+and supervisor node (right), linked by a three-wire CAN bus.*
+
 ## Mechanical
 
 The motor mount is parametric — original in OpenSCAD, later revisions in
@@ -121,35 +131,40 @@ iterated under physical testing: closed cylindrical pocket that couldn't be
 assembled → horizontal test-fit (wrong plane for the tuned PID) → vertical
 shaft-up tower (**used for the working demo**) → a rejected closed-front
 rev3 → the current **open-front + slide-in retaining plate** (rev4-lite).
-Generators and STLs in [`cad/`](cad/).
+The **D-bore lever, keyed to the motor's D-shaft, is printed and fitted**
+(the first bore printed undersized in PETG and was opened up — see the
+`fix(cad)` history). Generators and STLs in [`cad/`](cad/).
 
 ## Known limitations
 
 Kept deliberately visible:
 
+- **Encoder scaling is unverified against a physical measurement.** 1146
+  counts/rev was hand-calibrated and the firmware uses it, but no protractor
+  check against a commanded angle was done. All reported angles are
+  encoder-derived; **absolute angular accuracy is unconfirmed.**
+- **Overshoot on fast steps.** Large moves travel past target and recover:
+  89.5°→0 reached −1.5°, 180°→0 reached +1.2°, 0°→−45° reached −47.4° and
+  −46.1° on two runs — every recovery at `pwm=35`, the stiction floor. Cause:
+  the printed lever's rotational inertia back-driving the joint, with nothing
+  damping it because the TB6612 is left in coast (both inputs LOW) rather
+  than short brake at zero command. *Roadmap: brake instead of coast on stop.*
+- **Telemetry sampling artifact.** Status frames report drive effort from
+  the previous control iteration while position and error are sampled at
+  send time, so the two disagree for one frame after a target change —
+  visible as `err=9.9 pwm=0` in the logs. Documented in `sendStatus()`.
 - **No fail-safe.** No heartbeat, command timeout, or watchdog — if the bus
   drops, the joint holds its last target forever.
 - **Thin 5 V headroom.** One node's rail sits at 4.6 V (spec min 4.5 V);
-  divider midpoints ~2.7 V vs a ~2.5 V threshold. A 3.3 V-native
-  transceiver (SN65HVD230, TJA1051T/3) would remove the dividers and the
-  headroom concern.
-- **Coast, not brake, on stop** — the driver is high-impedance at zero
-  command, so nothing damps the lever's momentum; large fast moves
-  overshoot. "Brake on stop" is on the roadmap.
-- **D-bore lever is designed but unvalidated** — never printed; the motor
-  still runs the original round-bore lever, which carries a known slip
-  risk.
+  divider midpoints ~2.7 V vs a ~2.5 V threshold. A 3.3 V-native transceiver
+  (SN65HVD230, TJA1051T/3) would remove the dividers and the concern.
 - **Single joint; unloaded.** Multi-node bus arbitration is untested, and
   step responses carry no external load or disturbance-rejection data.
-- **Characterisation sampled at 10 Hz** — transient peaks between status
-  frames are not resolved; true overshoot may exceed the reported values.
 
 ## Authors
 
-- **[@inteeed](https://github.com/inteeed)** — hardware, physical-layer
-  bring-up & fault isolation, PID tuning, mechanical design
-- **[@DeadX05](https://github.com/DeadX05)** — CAN protocol, supervisor
-  software
-
-Work co-authored on the shared CAN and supervisor commits; hardware,
-fault-isolation and mechanical commits are individually attributed.
+- **Izzatbek Murodjonov ([@inteeed](https://github.com/inteeed))** —
+  hardware design, physical-layer bring-up & fault isolation, PID tuning,
+  mechanical design
+- **Boburjon Radjapov ([@DeadX05](https://github.com/DeadX05))** — CAN
+  protocol design, supervisor firmware, integration testing

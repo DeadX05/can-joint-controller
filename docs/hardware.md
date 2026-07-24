@@ -32,6 +32,11 @@ the ESP32 logic-high threshold, but thin — a 3.3 V-native transceiver such
 as the SN65HVD230 or TJA1051T/3 would remove both the dividers and the
 headroom concern).
 
+![Node B transceiver and RX divider](../media/node_transceiver_divider.jpg)
+
+*Node B transceiver and the 220 Ω/440 Ω divider stepping the 5 V RXD output
+down to ~3.3 V for the ESP32 input.*
+
 ### Bus topology & termination
 - CANH ↔ CANH, CANL ↔ CANL, GND ↔ GND between nodes.
 - Termination: 2 × 220 Ω in parallel at each node (~110 Ω per node),
