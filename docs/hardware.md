@@ -58,10 +58,11 @@ headroom concern).
 | Vcc | 3.3 V |
 | GND | common ground |
 
-**Counts per rev:** 700 (nominal — 7 PPR × 100:1 gearbox). Superseded by
-hand calibration; see the engineering log. *Verify physically before
-trusting the degree scale: command 90° and measure the lever with a
-protractor.*
+**Counts per rev:** 1146, hand-calibrated — the nominal 7 PPR × 100:1 = 700
+figure was wrong on this unit, and the firmware uses 1146. It was derived
+from encoder counts, **not** checked against an independent physical angle
+measurement, so absolute angular accuracy is unconfirmed (see the README's
+known limitations).
 
 ## Node B — supervisor
 
