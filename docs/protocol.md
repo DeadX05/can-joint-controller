@@ -1,88 +1,98 @@
 # CAN Bus Protocol Specification
 
-**Project:** CAN-Bus Joint Controller  
-**Bus baud rate:** 250 kbps  
-**Termination:** 110Ω effective (2× 220Ω in parallel) at each physical end of the bus  
-**Frame format:** Standard 11-bit CAN ID, data frame  
+**Project:** Distributed Joint Controller over CAN
+**Bus baud rate:** 250 kbit/s
+**Termination:** ~110 Ω per node (2 × 220 Ω in parallel), ~55 Ω across the bus
+**Frame format:** Standard 11-bit CAN ID, data frame
+
+> The original Day-1 design used 4-byte IEEE-754 floats. The implementation
+> switched to **int16 fixed-point in units of 0.1°** — half the payload,
+> no endianness/float portability concerns, and ample resolution for a
+> position loop. This document describes the protocol as implemented.
 
 ---
 
 ## Message Table
 
-| ID    | Name             | Direction              | Length  | Payload format                          | Rate   |
-|-------|------------------|------------------------|---------|-----------------------------------------|--------|
-| 0x100 | position_cmd     | Supervisor → Joint     | 4 bytes | `float setpoint_deg`                    | 50 Hz  |
-| 0x110 | joint_status     | Joint → Supervisor     | 8 bytes | `float actual_deg` + `float velocity_dps` | 50 Hz  |
+| ID    | Name         | Direction          | Length  | Rate            |
+|-------|--------------|--------------------|---------|-----------------|
+| 0x100 | position_cmd | Supervisor → Joint | 2 bytes | on command      |
+| 0x110 | joint_status | Joint → Supervisor | 8 bytes | 10 Hz           |
+
+All multi-byte fields are **little-endian**, signed unless noted.
 
 ---
 
-## Payload Detail
+## 0x100 — position_cmd
 
-### 0x100 — position_cmd
-
-Sent by Node B (supervisor) to Node A (joint controller).  
-Commands the PID setpoint in degrees.
+Sent by Node B (supervisor) to Node A (joint controller) when a target is
+entered. Commands the PID setpoint.
 
 ```
-Byte 0–3:  float  setpoint_deg   (IEEE 754, little-endian)
+Byte 0-1:  int16  target_deg_x10   (degrees × 10; 900 = 90.0°)
 ```
 
-**Example:** Command 90.0° → bytes `00 00 B4 42`
+Clamped to the joint's −45°…180° range **at the receiver**.
+
+**Example:** command 90.0° → `900` → bytes `84 03`.
 
 ---
 
-### 0x110 — joint_status
+## 0x110 — joint_status
 
-Sent by Node A (joint controller) to Node B (supervisor).  
-Reports current position and velocity for logging and plotting.
+Sent by Node A to Node B at 10 Hz. Carries everything the supervisor needs
+to display, log, and detect settling.
 
 ```
-Byte 0–3:  float  actual_deg     (IEEE 754, little-endian)
-Byte 4–7:  float  velocity_dps   (degrees per second, little-endian)
+Byte 0-1:  int16   position_deg_x10   (degrees × 10)
+Byte 2-3:  int16   target_deg_x10     (degrees × 10)
+Byte 4-5:  int16   error_deg_x10      (degrees × 10)
+Byte 6:    uint8   effort             (abs PWM duty, 0-255)
+Byte 7:    uint8   flags              (bit0 = settled, within deadband)
 ```
 
-**Example:** Position 87.3°, velocity 12.5 dps → `9A 19 AE 42` + `00 00 48 41`
+**Example:** position 87.3°, target 90.0°, error 2.7°, PWM 40, not settled
+→ `69 03  84 03  1B 00  28  00`.
 
 ---
 
-## Encoding / Decoding (C)
+## Encoding / decoding (C)
 
 ```c
-// Pack float into 4 bytes for CAN payload
-float value = 90.0f;
-uint8_t payload[4];
-memcpy(payload, &value, 4);
+// Pack a degree value into an int16 field (0.1° units)
+int16_t v = (int16_t)(deg * 10);
+data[0] = v & 0xFF;
+data[1] = v >> 8;
 
-// Unpack 4 bytes from CAN payload into float
-float received;
-memcpy(&received, payload, 4);
+// Unpack
+int16_t v = (int16_t)(data[0] | (data[1] << 8));
+float deg = v / 10.0f;
 ```
 
 ---
 
-## Node IDs / Roles
+## Node IDs / roles
 
-| Node   | Role        | Sends      | Receives   |
-|--------|-------------|------------|------------|
-| Node A | Joint ctrl  | 0x110      | 0x100      |
-| Node B | Supervisor  | 0x100      | 0x110      |
-
----
-
-## Error / Debug Notes
-
-- If no messages received: check shared GND between nodes, baud rate match, termination resistors present
-- CANH and CANL must not be swapped — double check MCP2551 pin 6 (CANL) and pin 7 (CANH)
-- MCP2551 VDD must be 3.3V, not 5V, when used with ESP32
+| Node   | Role       | Sends | Receives |
+|--------|------------|-------|----------|
+| Node A | Joint ctrl | 0x110 | 0x100    |
+| Node B | Supervisor | 0x100 | 0x110    |
 
 ---
 
-## Phase 2 Extension (planned)
+## Error / debug notes
 
-When scaling to a 2-DOF leg, additional IDs will be added:
+- No frames received: check shared GND between nodes, matching 250 kbit/s
+  bitrate, and that termination is present at both nodes.
+- CANH/CANL must not be swapped.
+- The MCP2551 is run at **5 V** (it is spec'd for 4.5–5.5 V); each ESP32 RX
+  line uses a 220 Ω / 440 Ω divider to bring the 5 V RXD down to ~3.3 V.
+  See `hardware.md` and `engineering-log.md` for why.
 
-| ID    | Name           | Description                  |
-|-------|----------------|------------------------------|
-| 0x101 | position_cmd_2 | Command for second joint     |
-| 0x111 | joint_status_2 | Status from second joint     |
-| 0x120 | imu_data       | Foot IMU (accel XYZ)         |
+---
+
+## Future extension (planned, not implemented)
+
+Scaling to a multi-DOF leg would add per-joint IDs, e.g. `0x101`/`0x111`
+for a second joint and `0x120` for a foot IMU. Multi-node bus arbitration
+is untested — see the README's known limitations.
