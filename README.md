@@ -135,6 +135,52 @@ The **D-bore lever, keyed to the motor's D-shaft, is printed and fitted**
 (the first bore printed undersized in PETG and was opened up — see the
 `fix(cad)` history). Generators and STLs in [`cad/`](cad/).
 
+  ## Instructions for demo
+
+  1. Build the hardware as shown in [`docs/hardware.md`](docs/hardware.md).
+     Make sure both ESP32 grounds are connected, CANH connects to CANH, CANL
+     connects to CANL, and both MCP2551 RXD lines use the documented voltage
+     divider.
+
+  2. Flash Node A with:
+
+     `firmware/node_a_joint_controller/node_a_joint_controller.ino`
+
+     Node A should be connected to the TB6612 motor driver, N20 motor, encoder,
+     and one MCP2551 transceiver.
+
+  3. Flash Node B with:
+
+     `firmware/node_b_supervisor/node_b_supervisor.ino`
+
+     Node B only needs the second MCP2551 transceiver and USB serial connection
+     to the PC.
+
+  4. Open the serial monitor for Node B at **115200 baud** with **newline**
+     line ending enabled.
+
+  5. Type target angles into the Node B serial monitor, for example:
+
+     ```text
+     45
+     90
+     0
+     -45
+
+  Node B sends each target over CAN as a 0x100 command. Node A runs the
+  PID loop and returns 0x110 status frames.
+
+  6. To log CSV telemetry, type:
+
+     L
+
+     Node B will print:
+
+     ms,pos,target,err,pwm,settled
+
+     Type L again to stop logging. The printed rows can be saved as a CSV and
+     plotted with the tools in analysis/ (analysis/).
+
 ## Known limitations
 
 Kept deliberately visible:
