@@ -164,6 +164,7 @@ The **D-bore lever, keyed to the motor's D-shaft, is printed and fitted**
      ```text
      45
      90
+     180
      0
      -45
 
